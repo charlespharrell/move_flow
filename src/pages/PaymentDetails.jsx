@@ -1,19 +1,63 @@
+import { useState, useEffect, useCallback } from "react";
 import { Link, useParams } from "react-router-dom";
 import PageHeader from "../components/PageHeader";
 import StatusBadge from "../components/StatusBadge";
 import DetailRow from "../components/DetailRow";
 import Card from "../components/ui/Card";
 import Button from "../components/ui/Button";
-import { getPaymentById } from "../services/paymentService";
-import { getShipmentById } from "../services/shipmentService";
-import { getCustomerById } from "../services/customerService";
+import { ErrorState, LoadingState } from "../components/ui/States";
+import { getPayment } from "../services/paymentService";
 import { formatCurrency, formatDate } from "../utils/format";
+import { describeApiError } from "../utils/apiError";
 
 function PaymentDetails() {
   const { paymentId } = useParams();
-  const payment = getPaymentById(paymentId);
 
-  if (!payment) {
+  const [reloadKey, setReloadKey] = useState(0);
+  const queryKey = `${paymentId}|${reloadKey}`;
+  const [completed, setCompleted] = useState({ key: null, payment: null, related: null, error: null });
+
+  useEffect(() => {
+    let cancelled = false;
+
+    getPayment(paymentId)
+      .then((result) => {
+        if (cancelled) return;
+        if (!result) {
+          setCompleted({ key: queryKey, payment: null, related: null, error: { status: 404 } });
+        } else {
+          setCompleted({ key: queryKey, payment: result.payment, related: result.related, error: null });
+        }
+      })
+      .catch((err) => {
+        if (cancelled) return;
+        setCompleted({ key: queryKey, payment: null, related: null, error: err });
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [queryKey, paymentId, reloadKey]);
+
+  const loading = completed.key !== queryKey;
+  const error = loading ? null : completed.error;
+  const payment = completed.payment;
+  const related = completed.related;
+
+  const reload = useCallback(() => setReloadKey((k) => k + 1), []);
+
+  if (loading) {
+    return (
+      <div>
+        <Link to="/payments" className="mb-6 inline-flex items-center gap-1.5 text-sm font-medium text-blue-400 hover:text-blue-300">
+          ← Back to Payments
+        </Link>
+        <LoadingState label="Loading payment…" />
+      </div>
+    );
+  }
+
+  if (error?.status === 404) {
     return (
       <div>
         <Link to="/payments" className="mb-6 inline-flex items-center gap-1.5 text-sm font-medium text-blue-400 hover:text-blue-300">
@@ -32,8 +76,24 @@ function PaymentDetails() {
     );
   }
 
-  const shipment = getShipmentById(payment.shipmentId);
-  const customer = getCustomerById(payment.customerId);
+  if (error || !payment) {
+    return (
+      <div>
+        <Link to="/payments" className="mb-6 inline-flex items-center gap-1.5 text-sm font-medium text-blue-400 hover:text-blue-300">
+          ← Back to Payments
+        </Link>
+        <ErrorState
+          title="Unable to load payment"
+          description={describeApiError(error, { forbidden: "You do not have permission to view payments.", fallback: "Unable to load this payment." })}
+          onRetry={reload}
+        />
+      </div>
+    );
+  }
+
+  // Related shipment/customer come from the same API response.
+  const shipment = related?.shipment ?? null;
+  const customer = related?.customer ?? null;
 
   return (
     <div>

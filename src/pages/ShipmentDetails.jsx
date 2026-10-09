@@ -1,18 +1,152 @@
-import { useParams, Link } from "react-router-dom";
+import { useState, useEffect, useCallback } from "react";
+import { Link, useNavigate, useParams } from "react-router-dom";
 import PageHeader from "../components/PageHeader";
 import StatusBadge from "../components/StatusBadge";
 import DetailRow from "../components/DetailRow";
 import Card from "../components/ui/Card";
 import Button from "../components/ui/Button";
-import { getShipmentById, getShipmentTimeline } from "../services/shipmentService";
+import Modal from "../components/ui/Modal";
+import ShipmentForm from "../components/ShipmentForm";
+import { ErrorState, LoadingState } from "../components/ui/States";
+import { getShipment, updateShipment, deleteShipment, getShipmentTimeline, getShipmentFormReference } from "../services/shipmentService";
+import { useAuth } from "../hooks/useAuth";
 import { formatCurrency, formatDate } from "../utils/format";
+import { describeApiError } from "../utils/apiError";
+import { useToast } from "../components/ui/Toast";
+
+const FORBIDDEN = "You do not have permission to manage shipments.";
+const EDITABLE_FIELDS = [
+  "customerId",
+  "driverId",
+  "vehicle",
+  "status",
+  "origin",
+  "destination",
+  "currentLocation",
+  "amount",
+  "pickupDate",
+  "expectedDeliveryDate",
+  "actualDeliveryDate",
+];
 
 function ShipmentDetails() {
   const { id } = useParams();
-  const shipment = getShipmentById(id);
+  const navigate = useNavigate();
+  const { role } = useAuth();
+  // Administrator and Operations manage shipments; Finance reads only.
+  const canManage = role === "Administrator" || role === "Operations";
+  const { addToast } = useToast();
 
-  // Not found state
-  if (!shipment) {
+  const [reloadKey, setReloadKey] = useState(0);
+
+  // Last completed fetch, keyed by the request it answered — a changed key
+  // reads as "loading" without any setState inside the fetch effect.
+  const queryKey = `${id}|${reloadKey}`;
+  const [completed, setCompleted] = useState({ key: null, shipment: null, error: null });
+
+  const [editOpen, setEditOpen] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [deleteOpen, setDeleteOpen] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+
+  // Reference lists for the edit form (customers + drivers from the API)
+  const [formOptions, setFormOptions] = useState({ customers: [], drivers: [] });
+
+  useEffect(() => {
+    let cancelled = false;
+
+    getShipment(id)
+      .then((shipmentResult) => {
+        if (cancelled) return;
+        if (shipmentResult == null) {
+          setCompleted({ key: queryKey, shipment: null, error: { status: 404 } });
+        } else {
+          setCompleted({ key: queryKey, shipment: shipmentResult, error: null });
+        }
+      })
+      .catch((err) => {
+        if (cancelled) return;
+        setCompleted({ key: queryKey, shipment: null, error: err });
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [queryKey, id, reloadKey]);
+
+  useEffect(() => {
+    if (!canManage) return;
+    let cancelled = false;
+    getShipmentFormReference()
+      .then((opts) => {
+        if (!cancelled) setFormOptions(opts);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [canManage]);
+
+  const loading = completed.key !== queryKey;
+  const error = loading ? null : completed.error;
+  const shipment = completed.shipment;
+
+  const reload = useCallback(() => setReloadKey((k) => k + 1), []);
+
+  async function handleUpdate(formData) {
+    // Only send the fields that actually changed; empty optional fields clear.
+    const next = {
+      customerId: formData.customerId.trim(),
+      origin: formData.origin.trim(),
+      destination: formData.destination.trim(),
+      status: formData.status,
+      driverId: formData.driverId.trim() || null,
+      vehicle: formData.vehicle.trim() || null,
+      currentLocation: formData.currentLocation.trim() || null,
+      amount: Number(formData.amount),
+      pickupDate: formData.pickupDate || null,
+      expectedDeliveryDate: formData.expectedDeliveryDate || null,
+      actualDeliveryDate: formData.actualDeliveryDate || null,
+    };
+    const patch = {};
+    for (const field of EDITABLE_FIELDS) {
+      const prev = field === "amount" ? Number(shipment[field]) : shipment[field] || null;
+      if (String(next[field]) !== String(prev)) patch[field] = next[field];
+    }
+    if (Object.keys(patch).length === 0) {
+      setEditOpen(false);
+      addToast("No changes to save", "info");
+      return;
+    }
+
+    setSaving(true);
+    try {
+      const updated = await updateShipment(id, patch);
+      setCompleted((prev) => ({ ...prev, shipment: updated ?? prev.shipment }));
+      setEditOpen(false);
+      addToast(`Shipment ${id} updated`, "success");
+    } catch (err) {
+      addToast(describeApiError(err, { forbidden: FORBIDDEN }), "error");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function handleDelete() {
+    setDeleting(true);
+    try {
+      await deleteShipment(id);
+      setDeleteOpen(false);
+      addToast(`Shipment ${id} deleted`, "success");
+      navigate("/shipments");
+    } catch (err) {
+      addToast(describeApiError(err, { forbidden: FORBIDDEN, fallback: "Unable to delete this shipment." }), "error");
+    } finally {
+      setDeleting(false);
+    }
+  }
+
+  if (loading) {
     return (
       <div>
         <Link
@@ -21,9 +155,21 @@ function ShipmentDetails() {
         >
           ← Back to Shipments
         </Link>
+        <LoadingState label="Loading shipment…" />
+      </div>
+    );
+  }
 
+  if (error?.status === 404) {
+    return (
+      <div>
+        <Link
+          to="/shipments"
+          className="mb-6 inline-flex items-center gap-1.5 text-sm font-medium text-blue-400 hover:text-blue-300"
+        >
+          ← Back to Shipments
+        </Link>
         <PageHeader title="Shipment Not Found" description="The shipment you are looking for does not exist." />
-
         <Card>
           <p className="text-sm text-zinc-400">
             No shipment was found with ID: <span className="font-mono font-medium text-zinc-100">{id}</span>
@@ -34,6 +180,24 @@ function ShipmentDetails() {
             </Link>
           </div>
         </Card>
+      </div>
+    );
+  }
+
+  if (error || !shipment) {
+    return (
+      <div>
+        <Link
+          to="/shipments"
+          className="mb-6 inline-flex items-center gap-1.5 text-sm font-medium text-blue-400 hover:text-blue-300"
+        >
+          ← Back to Shipments
+        </Link>
+        <ErrorState
+          title="Unable to load shipment"
+          description={describeApiError(error, { forbidden: "You do not have permission to view shipments.", fallback: "Unable to load this shipment." })}
+          onRetry={reload}
+        />
       </div>
     );
   }
@@ -62,8 +226,51 @@ function ShipmentDetails() {
       <PageHeader
         title={`Shipment ${shipment.id}`}
         description={`${shipment.origin} → ${shipment.destination} · ${shipment.customer}`}
-        action={<StatusBadge status={shipment.status} />}
+        action={
+          <div className="flex items-center gap-2">
+            <StatusBadge status={shipment.status} />
+            {canManage && (
+              <>
+                <Button variant="secondary" size="md" onClick={() => setEditOpen(true)}>Edit Shipment</Button>
+                <Button variant="secondary" size="md" onClick={() => setDeleteOpen(true)}>Delete Shipment</Button>
+              </>
+            )}
+          </div>
+        }
       />
+
+      {canManage && (
+        <Modal open={editOpen} onClose={() => setEditOpen(false)} title="Edit Shipment">
+          <ShipmentForm
+            customers={formOptions.customers}
+            drivers={formOptions.drivers}
+            initialData={shipment}
+            onSubmit={handleUpdate}
+            onCancel={() => setEditOpen(false)}
+            submitting={saving}
+            submitLabel="Save Changes"
+          />
+        </Modal>
+      )}
+
+      {canManage && (
+        <Modal open={deleteOpen} onClose={() => setDeleteOpen(false)} title="Delete Shipment">
+          <p className="text-sm text-zinc-300">
+            Delete shipment <span className="font-mono font-medium text-zinc-100">{id}</span>? This cannot be undone.
+          </p>
+          <p className="mt-2 text-xs text-zinc-500">
+            Shipments with payment history cannot be deleted.
+          </p>
+          <div className="mt-4 flex justify-end gap-2">
+            <Button variant="secondary" onClick={() => setDeleteOpen(false)} disabled={deleting}>
+              Cancel
+            </Button>
+            <Button onClick={handleDelete} disabled={deleting}>
+              {deleting ? "Deleting…" : "Delete Shipment"}
+            </Button>
+          </div>
+        </Modal>
+      )}
 
       {/* Top summary card */}
       <Card padding="p-0" className="overflow-hidden">

@@ -4,7 +4,7 @@ import Button from "./ui/Button";
 import { validateDriver } from "../utils/validation";
 
 // Driver / Hauler add/edit form — dark theme, validation, accessible labels
-export default function DriverForm({ initialData, onSubmit, onCancel, submitLabel = "Save Driver" }) {
+export default function DriverForm({ initialData, onSubmit, onCancel, submitting = false, submitLabel = "Save Driver" }) {
   const [form, setForm] = useState({
     name: "",
     phone: "",
@@ -144,10 +144,12 @@ export default function DriverForm({ initialData, onSubmit, onCancel, submitLabe
       </div>
 
       <div className="flex justify-end gap-2 pt-2">
-        <Button type="button" variant="secondary" onClick={onCancel}>
+        <Button type="button" variant="secondary" onClick={onCancel} disabled={submitting}>
           Cancel
         </Button>
-        <Button type="submit">{submitLabel}</Button>
+        <Button type="submit" disabled={submitting}>
+          {submitting ? "Saving…" : submitLabel}
+        </Button>
       </div>
     </form>
   );

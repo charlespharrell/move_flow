@@ -1,7 +1,5 @@
 import { NavLink } from "react-router-dom";
-import { useState, useEffect } from "react";
-import { getCurrentUser, getCurrentUserRole, subscribe as subscribeAuth, setCurrentUserId } from "../services/authService";
-import { getUsers } from "../services/userService";
+import { useAuth } from "../hooks/useAuth";
 import { rolePermissions } from "../services/userService";
 
 // Navigation config — Phase 3 final groups
@@ -98,59 +96,36 @@ function Icon({ name }) {
   );
 }
 
-function RoleSwitcher() {
-  const [role, setRole] = useState(() => getCurrentUserRole());
-  const [currentUser, setCurrentUser] = useState(() => getCurrentUser());
-
-  useEffect(() => {
-    const unsub = subscribeAuth(() => {
-      setRole(getCurrentUserRole());
-      setCurrentUser(getCurrentUser());
-    });
-    return unsub;
-  }, []);
-
-  const users = getUsers();
-
-  function handleUserChange(e) {
-    setCurrentUserId(e.target.value);
-  }
+/**
+ * Read-only identity of the signed-in user, as reported by the API. The former
+ * role switcher let anyone impersonate another account, which real
+ * authentication makes impossible.
+ */
+function CurrentUserCard() {
+  const { user } = useAuth();
+  const initials =
+    user?.name
+      ?.split(" ")
+      .map((n) => n[0])
+      .join("")
+      .slice(0, 2)
+      .toUpperCase() || "?";
 
   return (
-    <div className="space-y-2">
-      <div className="flex items-center gap-2">
-        <div className="flex h-7 w-7 items-center justify-center rounded-full bg-blue-600 text-xs font-bold text-white">
-          {currentUser?.name?.split(" ").map((n) => n[0]).join("").slice(0, 2) || "AD"}
-        </div>
-        <div className="min-w-0 flex-1">
-          <p className="truncate text-xs font-medium text-zinc-100">{currentUser?.name}</p>
-          <p className="text-[11px] text-zinc-500">{role}</p>
-        </div>
+    <div className="flex items-center gap-2">
+      <div className="flex h-7 w-7 items-center justify-center rounded-full bg-blue-600 text-xs font-bold text-white">
+        {initials}
       </div>
-      <select
-        aria-label="Switch current user"
-        value={currentUser?.id}
-        onChange={handleUserChange}
-        className="w-full rounded-lg border border-zinc-700 bg-zinc-800 px-2 py-1.5 text-xs text-zinc-200 outline-none focus:border-blue-500"
-      >
-        {users.map((u) => (
-          <option key={u.id} value={u.id}>
-            {u.name} — {u.role}
-          </option>
-        ))}
-      </select>
-      <p className="text-[11px] text-zinc-500">Frontend role demo — affects sidebar visibility</p>
+      <div className="min-w-0 flex-1">
+        <p className="truncate text-xs font-medium text-zinc-100">{user?.name}</p>
+        <p className="text-[11px] text-zinc-500">{user?.role}</p>
+      </div>
     </div>
   );
 }
 
 function FilteredNav({ onItemClick }) {
-  const [role, setRole] = useState(() => getCurrentUserRole());
-
-  useEffect(() => {
-    const unsub = subscribeAuth(() => setRole(getCurrentUserRole()));
-    return unsub;
-  }, []);
+  const { role } = useAuth();
 
   const allowed = rolePermissions[role] || [];
 
@@ -160,6 +135,10 @@ function FilteredNav({ onItemClick }) {
       items: group.items.filter((item) => allowed.includes(item.label)),
     }))
     .filter((group) => group.items.length > 0);
+
+  if (filteredGroups.length === 0) {
+    return <p className="px-3 text-xs text-zinc-500">No navigation items available for your role.</p>;
+  }
 
   return (
     <div className="space-y-6">
@@ -192,7 +171,7 @@ function FilteredNav({ onItemClick }) {
 
 export default function Sidebar() {
   return (
-    <aside className="hidden w-64 shrink-0 flex-col border-r border-zinc-800 bg-zinc-900 md:flex">
+    <aside className="hidden h-screen w-64 shrink-0 flex-col border-r border-zinc-800 bg-zinc-900 md:flex">
       {/* Brand */}
       <div className="flex h-[64px] items-center gap-3 border-b border-zinc-800 px-6">
         <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-blue-600 text-sm font-bold text-white">M</span>
@@ -207,9 +186,9 @@ export default function Sidebar() {
         <FilteredNav />
       </nav>
 
-      {/* Current user / role switcher */}
+      {/* Signed-in user */}
       <div className="border-t border-zinc-800 p-4">
-        <RoleSwitcher />
+        <CurrentUserCard />
       </div>
     </aside>
   );
@@ -254,7 +233,7 @@ export function MobileSidebar({ open, onClose }) {
         </nav>
 
         <div className="border-t border-zinc-800 p-4">
-          <RoleSwitcher />
+          <CurrentUserCard />
         </div>
       </div>
     </div>

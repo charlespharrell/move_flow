@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { Link, useParams } from "react-router-dom";
 import PageHeader from "../components/PageHeader";
 import StatusBadge from "../components/StatusBadge";
@@ -8,24 +8,112 @@ import Button from "../components/ui/Button";
 import StatCard from "../components/StatCard";
 import Modal from "../components/ui/Modal";
 import DriverForm from "../components/DriverForm";
-import { getDriverById, getDriverShipments, getDriverStats, getCurrentDriverShipment, updateDriver, subscribe } from "../services/driverService";
+import { ErrorState, LoadingState } from "../components/ui/States";
+import { getDriver, updateDriver, deleteDriver } from "../services/driverService";
+import { useAuth } from "../hooks/useAuth";
 import { formatCurrency, formatDate } from "../utils/format";
+import { describeApiError } from "../utils/apiError";
 import { useToast } from "../components/ui/Toast";
+
+const FORBIDDEN = "You do not have permission to manage drivers.";
 
 function DriverDetails() {
   const { driverId } = useParams();
-  const [editOpen, setEditOpen] = useState(false);
-  const [, forceUpdate] = useState(0);
+  const { role } = useAuth();
+  const canManage = role === "Administrator" || role === "Operations";
   const { addToast } = useToast();
-  const driver = getDriverById(driverId);
+
+  const [reloadKey, setReloadKey] = useState(0);
+  const queryKey = `${driverId}|${reloadKey}`;
+  const [completed, setCompleted] = useState({ key: null, driver: null, related: null, error: null });
+
+  const [editOpen, setEditOpen] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [deleteOpen, setDeleteOpen] = useState(false);
+  const [deleting, setDeleting] = useState(false);
 
   useEffect(() => {
-    const unsub = subscribe(() => forceUpdate((v) => v + 1));
-    return unsub;
-  }, []);
+    let cancelled = false;
 
-  // Not found
-  if (!driver) {
+    getDriver(driverId)
+      .then((result) => {
+        if (cancelled) return;
+        if (!result) {
+          setCompleted({ key: queryKey, driver: null, related: null, error: { status: 404 } });
+        } else {
+          setCompleted({ key: queryKey, driver: result.driver, related: result.related, error: null });
+        }
+      })
+      .catch((err) => {
+        if (cancelled) return;
+        setCompleted({ key: queryKey, driver: null, related: null, error: err });
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [queryKey, driverId, reloadKey]);
+
+  const loading = completed.key !== queryKey;
+  const error = loading ? null : completed.error;
+  const driver = completed.driver;
+  const related = completed.related;
+
+  const reload = useCallback(() => setReloadKey((k) => k + 1), []);
+
+  async function handleUpdate(formData) {
+    const patch = {};
+    const fields = ["name", "phone", "email", "vehicle", "vehicleType", "licenseStatus", "verificationStatus", "status", "joinedDate"];
+    for (const field of fields) {
+      const next = field === "email" ? String(formData[field] ?? "").trim().toLowerCase() : String(formData[field] ?? "").trim();
+      const prev = String(driver[field] ?? "").trim();
+      if (next !== prev) patch[field] = next || undefined;
+    }
+    if (Object.keys(patch).length === 0) {
+      setEditOpen(false);
+      addToast("No changes to save", "info");
+      return;
+    }
+
+    setSaving(true);
+    try {
+      const updated = await updateDriver(driverId, patch);
+      setCompleted((prev) => ({ ...prev, driver: updated ?? prev.driver }));
+      setEditOpen(false);
+      addToast(`Driver ${updated?.name ?? driver.name} updated`, "success");
+    } catch (err) {
+      addToast(describeApiError(err, { forbidden: FORBIDDEN }), "error");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function handleDelete() {
+    setDeleting(true);
+    try {
+      await deleteDriver(driverId);
+      setDeleteOpen(false);
+      addToast(`Driver ${driver.name} deleted`, "success");
+      window.location.href = "/drivers";
+    } catch (err) {
+      addToast(describeApiError(err, { forbidden: FORBIDDEN, fallback: "Unable to delete this driver." }), "error");
+    } finally {
+      setDeleting(false);
+    }
+  }
+
+  if (loading) {
+    return (
+      <div>
+        <Link to="/drivers" className="mb-6 inline-flex items-center gap-1.5 text-sm font-medium text-blue-400 hover:text-blue-300">
+          ← Back to Drivers
+        </Link>
+        <LoadingState label="Loading driver…" />
+      </div>
+    );
+  }
+
+  if (error?.status === 404) {
     return (
       <div>
         <Link to="/drivers" className="mb-6 inline-flex items-center gap-1.5 text-sm font-medium text-blue-400 hover:text-blue-300">
@@ -44,9 +132,24 @@ function DriverDetails() {
     );
   }
 
-  const shipments = getDriverShipments(driver.id);
-  const stats = getDriverStats(driver.id);
-  const current = getCurrentDriverShipment(driver.id);
+  if (error || !driver) {
+    return (
+      <div>
+        <Link to="/drivers" className="mb-6 inline-flex items-center gap-1.5 text-sm font-medium text-blue-400 hover:text-blue-300">
+          ← Back to Drivers
+        </Link>
+        <ErrorState
+          title="Unable to load driver"
+          description={describeApiError(error, { forbidden: "You do not have permission to view drivers.", fallback: "Unable to load this driver." })}
+          onRetry={reload}
+        />
+      </div>
+    );
+  }
+
+  const shipments = related?.shipments?.items ?? [];
+  const stats = related?.shipments ?? { total: 0, active: 0, completed: 0, totalValue: 0 };
+  const current = related?.currentShipment ?? null;
   const sorted = [...shipments].sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
 
   return (
@@ -62,23 +165,47 @@ function DriverDetails() {
           <div className="flex flex-wrap items-center gap-2">
             <StatusBadge status={driver.status} />
             <StatusBadge status={driver.verificationStatus} />
-            <Button variant="secondary" size="md" onClick={() => setEditOpen(true)}>Edit Driver</Button>
+            {canManage && (
+              <>
+                <Button variant="secondary" size="md" onClick={() => setEditOpen(true)}>Edit Driver</Button>
+                <Button variant="secondary" size="md" onClick={() => setDeleteOpen(true)}>Delete Driver</Button>
+              </>
+            )}
           </div>
         }
       />
 
-      <Modal open={editOpen} onClose={() => setEditOpen(false)} title="Edit Driver">
-        <DriverForm
-          initialData={driver}
-          onSubmit={(data) => {
-            updateDriver(driver.id, data);
-            setEditOpen(false);
-            addToast(`Driver ${data.name} updated`, "success");
-          }}
-          onCancel={() => setEditOpen(false)}
-          submitLabel="Save Changes"
-        />
-      </Modal>
+      {canManage && (
+        <Modal open={editOpen} onClose={() => setEditOpen(false)} title="Edit Driver">
+          <DriverForm
+            initialData={driver}
+            onSubmit={handleUpdate}
+            onCancel={() => setEditOpen(false)}
+            submitting={saving}
+            submitLabel="Save Changes"
+          />
+        </Modal>
+      )}
+
+      {canManage && (
+        <Modal open={deleteOpen} onClose={() => setDeleteOpen(false)} title="Delete Driver">
+          <p className="text-sm text-zinc-300">
+            Delete <span className="font-medium text-zinc-100">{driver.name}</span>{" "}
+            (<span className="font-mono">{driver.id}</span>)? This cannot be undone.
+          </p>
+          <p className="mt-2 text-xs text-zinc-500">
+            Drivers with shipment assignments cannot be deleted.
+          </p>
+          <div className="mt-4 flex justify-end gap-2">
+            <Button variant="secondary" onClick={() => setDeleteOpen(false)} disabled={deleting}>
+              Cancel
+            </Button>
+            <Button onClick={handleDelete} disabled={deleting}>
+              {deleting ? "Deleting…" : "Delete Driver"}
+            </Button>
+          </div>
+        </Modal>
+      )}
 
       {/* Stats */}
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
@@ -117,7 +244,7 @@ function DriverDetails() {
               <DetailRow label="Availability"><StatusBadge status={driver.status} /></DetailRow>
               <DetailRow label="Joined">{formatDate(driver.joinedDate)}</DetailRow>
               <DetailRow label="Current shipment">
-                {current ? (
+                {current?.id ? (
                   <Link to={`/shipments/${current.id}`} className="font-mono text-blue-400 hover:text-blue-300">{current.id}</Link>
                 ) : (
                   <span className="text-zinc-500">No active shipment</span>
@@ -129,7 +256,7 @@ function DriverDetails() {
           {/* Current Assignment prominent */}
           <Card>
             <h2 className="text-sm font-semibold text-zinc-100">Current Assignment</h2>
-            {current ? (
+            {current?.id ? (
               <div className="mt-3 rounded-lg border border-blue-900/40 bg-blue-950/20 p-4">
                 <p className="font-mono text-sm font-semibold text-blue-300">{current.id}</p>
                 <p className="mt-1 text-sm text-zinc-300">{current.origin} → {current.destination}</p>
@@ -142,12 +269,12 @@ function DriverDetails() {
                 </div>
               </div>
             ) : (
-              <p className="mt-3 text-sm text-zinc-500">No active shipment — driver is {driver.status.toLowerCase()}.</p>
+              <p className="mt-3 text-sm text-zinc-500">No active shipment — driver is {String(driver.status || "").toLowerCase()}.</p>
             )}
           </Card>
         </div>
 
-        {/* Right: shipment history spans 2 cols */}
+        {/* Right: shipment history */}
         <div className="lg:col-span-2">
           <Card padding="p-0" className="overflow-hidden">
             <div className="flex items-center justify-between border-b border-zinc-800 px-5 py-4">

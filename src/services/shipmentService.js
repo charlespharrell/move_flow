@@ -1,47 +1,81 @@
-// Shipment service — lightweight mock abstraction
-// Replace with real API calls later; keep same signatures
-import shipments from "../data/shipments";
+// Shipment service — MoveFlow API-backed. The backend (PostgreSQL) is the
+// source of truth for shipment records; the Shipments pages read and write
+// through the API.
+//
+// `getShipmentTimeline` stays synchronous: it derives timeline events from the
+// single shipment row the details page already fetched, without an extra
+// backend call.
+import { api } from "./api.js";
 
-export function getShipments() {
-  return shipments;
+const BASE = "/shipments";
+
+/**
+ * List shipments server-side: the API resolves pagination, search and status
+ * filtering so the page never holds more than one page of records.
+ *
+ * @returns {Promise<{shipments: object[], pagination: {page:number, limit:number, total:number, totalPages:number}>}>}
+ */
+export async function listShipments({ page = 1, limit = 8, search = "", status, customer, driver, sort, order } = {}) {
+  const query = api.query({
+    page,
+    limit,
+    search: search.trim() || undefined,
+    status,
+    customer,
+    driver,
+    sort,
+    order,
+  });
+  return api.get(`${BASE}${query}`);
 }
 
-export function getShipmentById(id) {
-  return shipments.find((s) => s.id === id) || null;
+/**
+ * Fetch one shipment from the API.
+ *
+ * @returns {Promise<object|null>} the shipment DTO, or null when the API
+ *   reports it does not exist (404).
+ */
+export async function getShipment(id) {
+  try {
+    const data = await api.get(`${BASE}/${encodeURIComponent(id)}`);
+    return data?.shipment ?? null;
+  } catch (error) {
+    if (error?.status === 404) return null;
+    throw error;
+  }
 }
 
-export function getRecentShipments(limit = 5) {
-  // Most recent by createdAt descending
-  return [...shipments]
-    .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))
-    .slice(0, limit);
+/** @returns {Promise<object>} the created shipment DTO. */
+export async function createShipment(input) {
+  const data = await api.post(BASE, input);
+  return data?.shipment ?? null;
 }
 
-// Dashboard statistics derived from shipments
-export function getDashboardStats() {
-  const total = shipments.length;
-  const pending = shipments.filter((s) => s.status === "Pending").length;
-  const assigned = shipments.filter((s) => s.status === "Assigned").length;
-  const inTransit = shipments.filter((s) => s.status === "In Transit").length;
-  const delivered = shipments.filter((s) => s.status === "Delivered").length;
-  const cancelled = shipments.filter((s) => s.status === "Cancelled").length;
-  const active = assigned + inTransit;
-  const totalRevenue = shipments.reduce((sum, s) => sum + s.amount, 0);
-  const deliveredRevenue = shipments
-    .filter((s) => s.status === "Delivered")
-    .reduce((sum, s) => sum + s.amount, 0);
+/** PATCH — the caller sends only the fields that were edited. */
+export async function updateShipment(id, patch) {
+  const data = await api.patch(`${BASE}/${encodeURIComponent(id)}`, patch);
+  return data?.shipment ?? null;
+}
 
-  return {
-    total,
-    pending,
-    assigned,
-    inTransit,
-    delivered,
-    cancelled,
-    active,
-    totalRevenue,
-    deliveredRevenue,
-  };
+/** @returns {Promise<string|null>} the deleted shipment's id. */
+export async function deleteShipment(id) {
+  const data = await api.delete(`${BASE}/${encodeURIComponent(id)}`);
+  return data?.id ?? id;
+}
+
+/**
+ * Reference lists the create/edit form needs to populate its customer and
+ * driver dropdowns, fetched from the same API. Drivers carry the display names
+ * and vehicle types the labels render.
+ *
+ * @returns {Promise<{customers: object[], drivers: object[]}>}
+ */
+export async function getShipmentFormReference() {
+  const [customers, drivers] = await Promise.all([
+    api.get(`/customers?${api.query({ limit: 100 })}`),
+    api.get(`/drivers?${api.query({ limit: 100 })}`),
+  ]);
+  return { customers: customers?.customers ?? [], drivers: drivers?.drivers ?? [] };
 }
 
 // Build timeline events based on shipment status
@@ -124,10 +158,6 @@ export function getShipmentTimeline(shipment) {
       date: shipment.pickupDate,
       done: false,
     });
-  }
-
-  if (shipment.status === "Pending") {
-    // already has awaiting event
   }
 
   return events;

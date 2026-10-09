@@ -1,117 +1,59 @@
-// Customer service — mock layer with localStorage persistence
-import customersSeed from "../data/customers";
-import shipments from "../data/shipments";
+// Customer service — MoveFlow API-backed. The backend is the source of truth
+// for customer records and their shipment aggregates (`shipmentStats` on list
+// rows, `related.shipments` on the detail response); the shipment history
+// itself is fetched from the Shipments API. No localStorage persistence.
+import { api } from "./api.js";
 
-const STORAGE_KEY = "moveflow_customers";
+const BASE = "/customers";
 
-// Load from localStorage or seed; do not overwrite existing data on load
-function loadCustomers() {
-  if (typeof window === "undefined") return [...customersSeed];
-  try {
-    const raw = window.localStorage.getItem(STORAGE_KEY);
-    if (raw) {
-      const parsed = JSON.parse(raw);
-      if (Array.isArray(parsed) && parsed.length > 0) return parsed;
-    }
-  } catch {
-    // ignore parse errors
-  }
-  return [...customersSeed];
-}
-
-let store = loadCustomers();
-const listeners = new Set();
-
-function persist() {
-  if (typeof window === "undefined") return;
-  try {
-    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(store));
-  } catch {
-    // quota or unavailable — ignore
-  }
-}
-
-function notify() {
-  listeners.forEach((cb) => cb());
-}
-
-function generateId() {
-  // Find max numeric suffix to avoid collisions
-  const max = store.reduce((m, c) => {
-    const n = parseInt(c.id.split("-")[1] || "0", 10);
-    return n > m ? n : m;
-  }, 0);
-  return `CUST-${String(max + 1).padStart(3, "0")}`;
-}
-
-export function subscribe(callback) {
-  listeners.add(callback);
-  return () => listeners.delete(callback);
-}
-
-export function getCustomers() {
-  return store;
-}
-
-export function getCustomerById(id) {
-  return store.find((c) => c.id === id) || null;
-}
-
-// Add new customer — generates unique ID
-export function addCustomer(data) {
-  const customer = {
-    id: generateId(),
-    businessName: data.businessName?.trim() || "",
-    contactName: data.contactName?.trim() || "",
-    email: data.email?.trim() || "",
-    phone: data.phone?.trim() || "",
-    status: data.status || "Active",
-    dateJoined: data.dateJoined || new Date().toISOString().slice(0, 10),
-  };
-  store = [customer, ...store];
-  persist();
-  notify();
-  return customer;
-}
-
-// Update existing — preserves id
-export function updateCustomer(id, patch) {
-  let updated = null;
-  store = store.map((c) => {
-    if (c.id !== id) return c;
-    updated = {
-      ...c,
-      businessName: patch.businessName?.trim() ?? c.businessName,
-      contactName: patch.contactName?.trim() ?? c.contactName,
-      email: patch.email?.trim() ?? c.email,
-      phone: patch.phone?.trim() ?? c.phone,
-      status: patch.status ?? c.status,
-      dateJoined: patch.dateJoined ?? c.dateJoined,
-    };
-    return updated;
+/**
+ * List customers server-side: pagination, search and status filtering are all
+ * resolved by the API so the page never holds more than one page of records.
+ *
+ * @returns {Promise<{customers: object[], pagination: {page:number, limit:number, total:number, totalPages:number}>}>}
+ */
+export async function listCustomers({ page = 1, limit = 8, search = "", status, sort, order } = {}) {
+  const query = api.query({
+    page,
+    limit,
+    search: search.trim() || undefined,
+    status,
+    sort,
+    order,
   });
-  if (updated) {
-    persist();
-    notify();
+  return api.get(`${BASE}${query}`);
+}
+
+/**
+ * Fetch one customer plus its shipment relationship summary.
+ *
+ * @returns {Promise<{customer: object, related: {shipments: object}}|null>} null
+ *   when the API reports the customer does not exist (404).
+ */
+export async function getCustomer(id) {
+  try {
+    const data = await api.get(`${BASE}/${encodeURIComponent(id)}`);
+    return { customer: data?.customer ?? null, related: data?.related ?? null };
+  } catch (error) {
+    if (error?.status === 404) return null;
+    throw error;
   }
-  return updated;
 }
 
-// Shipments belonging to a customer
-export function getCustomerShipments(customerId) {
-  return shipments.filter((s) => s.customerId === customerId);
+/** @returns {Promise<object>} the created customer DTO. */
+export async function createCustomer(input) {
+  const data = await api.post(BASE, input);
+  return data?.customer ?? null;
 }
 
-// Derived stats for a customer
-export function getCustomerStats(customerId) {
-  const all = getCustomerShipments(customerId);
-  const active = all.filter((s) => ["Assigned", "In Transit"].includes(s.status)).length;
-  const delivered = all.filter((s) => s.status === "Delivered").length;
-  const totalSpending = all.reduce((sum, s) => sum + s.amount, 0);
-  return {
-    total: all.length,
-    active,
-    delivered,
-    totalSpending,
-  };
+/** PATCH — the caller sends only the fields that were edited. */
+export async function updateCustomer(id, patch) {
+  const data = await api.patch(`${BASE}/${encodeURIComponent(id)}`, patch);
+  return data?.customer ?? null;
+}
+
+/** @returns {Promise<string|null>} the deleted customer's id. */
+export async function deleteCustomer(id) {
+  const data = await api.delete(`${BASE}/${encodeURIComponent(id)}`);
+  return data?.id ?? id;
 }

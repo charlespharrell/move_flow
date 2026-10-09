@@ -6,11 +6,18 @@ import Card from "../components/ui/Card";
 import { login } from "../services/authService";
 import { useToast } from "../components/ui/Toast";
 
+const DEMO_ACCOUNTS = [
+  { email: "admin@moveflow.local", role: "Administrator" },
+  { email: "operations@moveflow.local", role: "Operations" },
+  { email: "finance@moveflow.local", role: "Finance" },
+];
+const DEMO_PASSWORD = "MoveFlow#2026";
+
 function Login() {
   const navigate = useNavigate();
   const location = useLocation();
-  const [email, setEmail] = useState("ada@moveflow.ng");
-  const [password, setPassword] = useState("password");
+  const [email, setEmail] = useState("admin@moveflow.local");
+  const [password, setPassword] = useState(DEMO_PASSWORD);
   const [remember, setRemember] = useState(true);
   const [error, setError] = useState("");
   const [submitting, setSubmitting] = useState(false);
@@ -18,7 +25,7 @@ function Login() {
 
   const from = location.state?.from?.pathname || "/";
 
-  function handleSubmit(e) {
+  async function handleSubmit(e) {
     e.preventDefault();
     setError("");
     if (!email.trim() || !password) {
@@ -26,14 +33,15 @@ function Login() {
       return;
     }
     setSubmitting(true);
-    const result = login(email, password, remember);
-    setSubmitting(false);
-    if (!result.success) {
-      setError(result.error);
-      return;
+    try {
+      const user = await login(email, password, remember);
+      addToast(`Welcome back, ${user.name}`, "success");
+      navigate(from, { replace: true });
+    } catch (err) {
+      setError(err?.message || "Unable to sign in. Please try again.");
+    } finally {
+      setSubmitting(false);
     }
-    addToast(`Welcome back, ${result.user.name}`, "success");
-    navigate(from, { replace: true });
   }
 
   return (
@@ -63,7 +71,7 @@ function Login() {
                 autoComplete="email"
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
-                placeholder="ada@moveflow.ng"
+                placeholder="you@moveflow.local"
                 required
               />
             </div>
@@ -103,7 +111,7 @@ function Login() {
             </Button>
 
             <p className="text-center text-xs text-zinc-500">
-              Demo: use any account with password <span className="font-mono text-zinc-300">password</span>
+              Demo: sign in with <span className="font-mono text-zinc-300">{DEMO_PASSWORD}</span>
             </p>
           </form>
         </Card>
@@ -111,20 +119,23 @@ function Login() {
         <div className="mt-4 rounded-xl border border-zinc-800 bg-zinc-900 p-4">
           <p className="text-xs font-medium uppercase tracking-wider text-zinc-500">Demo accounts</p>
           <div className="mt-2 grid gap-1.5 text-xs">
-            <div className="flex justify-between">
-              <span className="font-mono text-zinc-400">ada@moveflow.ng</span>
-              <span className="text-zinc-500">Administrator</span>
-            </div>
-            <div className="flex justify-between">
-              <span className="font-mono text-zinc-400">chinedu@moveflow.ng</span>
-              <span className="text-zinc-500">Operations</span>
-            </div>
-            <div className="flex justify-between">
-              <span className="font-mono text-zinc-400">funmilayo@moveflow.ng</span>
-              <span className="text-zinc-500">Finance</span>
-            </div>
+            {DEMO_ACCOUNTS.map((account) => (
+              <div key={account.email} className="flex justify-between">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setEmail(account.email);
+                    setPassword(DEMO_PASSWORD);
+                  }}
+                  className="font-mono text-zinc-400 hover:text-zinc-200"
+                >
+                  {account.email}
+                </button>
+                <span className="text-zinc-500">{account.role}</span>
+              </div>
+            ))}
           </div>
-          <p className="mt-2 text-xs text-zinc-500">All demo passwords are `password`.</p>
+          <p className="mt-2 text-xs text-zinc-500">All demo passwords are {DEMO_PASSWORD}.</p>
         </div>
       </div>
     </div>

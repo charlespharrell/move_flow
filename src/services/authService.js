@@ -1,123 +1,158 @@
-// Current user / auth — frontend mock, no real authentication
-// Session stored in localStorage; backend will replace later
-import { getUserById, getUsers } from "./userService";
-
-const CURRENT_USER_KEY = "moveflow_current_user_id";
-const AUTH_KEY = "moveflow_auth";
-const DEFAULT_USER_ID = "USR-001";
+// Real authentication against the MoveFlow API (JWT bearer tokens).
+//
+// The session store keeps the same module-level + subscribe() shape the other
+// MoveFlow services use, so components can re-render via useAuth() without a
+// state-management library.
+import { api, setUnauthorizedHandler, AUTH_STORAGE_KEY } from "./api.js";
 
 const listeners = new Set();
+
+// status: "anonymous" | "restoring" | "authenticated"
+let state = { status: "anonymous", user: null };
 
 function notify() {
   listeners.forEach((cb) => cb());
 }
 
-export function subscribe(callback) {
+export function subscribeAuth(callback) {
   listeners.add(callback);
   return () => listeners.delete(callback);
 }
 
-function safeGet(key) {
+/** Must be referentially stable between changes — useSyncExternalStore needs it. */
+export function getAuthSnapshot() {
+  return state;
+}
+
+function storageFor(remember) {
   if (typeof window === "undefined") return null;
-  try {
-    return window.localStorage.getItem(key);
-  } catch {
-    return null;
+  return remember ? window.localStorage : window.sessionStorage;
+}
+
+function clearStorage() {
+  if (typeof window === "undefined") return;
+  for (const store of [window.localStorage, window.sessionStorage]) {
+    try {
+      store.removeItem(AUTH_STORAGE_KEY);
+    } catch {
+      // ignore
+    }
   }
 }
 
-function safeSet(key, value) {
+function hydrate() {
   if (typeof window === "undefined") return;
   try {
-    window.localStorage.setItem(key, value);
+    for (const store of [window.localStorage, window.sessionStorage]) {
+      const raw = store.getItem(AUTH_STORAGE_KEY);
+      if (!raw) continue;
+      const parsed = JSON.parse(raw);
+      if (parsed && typeof parsed.token === "string" && parsed.user) {
+        state = { status: "authenticated", user: parsed.user };
+        return;
+      }
+    }
   } catch {
-    // ignore quota
+    // fall through to anonymous
   }
+  state = { status: "anonymous", user: null };
 }
 
-function safeRemove(key) {
-  if (typeof window === "undefined") return;
-  try {
-    window.localStorage.removeItem(key);
-  } catch {
-    // ignore
-  }
-}
+hydrate();
 
-export function getCurrentUserId() {
-  const raw = safeGet(CURRENT_USER_KEY);
-  if (raw) return raw;
-  return DEFAULT_USER_ID;
-}
-
-export function getCurrentUser() {
-  const id = getCurrentUserId();
-  return getUserById(id) || getUserById(DEFAULT_USER_ID);
-}
-
-export function setCurrentUserId(userId) {
-  safeSet(CURRENT_USER_KEY, userId);
-  // ensure auth flag stays in sync
-  const auth = getAuthState();
-  if (auth.isAuthenticated) {
-    safeSet(AUTH_KEY, JSON.stringify({ ...auth, userId }));
-  }
+function setState(next) {
+  state = next;
   notify();
 }
 
-export function getCurrentUserRole() {
-  const user = getCurrentUser();
-  return user?.role || "Administrator";
+export function setSession(token, user, remember = true) {
+  const store = storageFor(remember);
+  try {
+    store?.setItem(AUTH_STORAGE_KEY, JSON.stringify({ token, user, remember }));
+  } catch {
+    // ignore quota errors
+  }
+  setState({ status: "authenticated", user });
 }
 
-// --- Mock session ---
-
-export function getAuthState() {
-  const raw = safeGet(AUTH_KEY);
-  if (raw) {
-    try {
-      const parsed = JSON.parse(raw);
-      if (parsed && typeof parsed.isAuthenticated === "boolean") return parsed;
-    } catch {
-      // malformed — fallthrough to defaults
-    }
-  }
-  // No session yet — require login (frontend-only auth)
-  return { isAuthenticated: false, userId: getCurrentUserId() };
+export function clearSession() {
+  clearStorage();
+  setState({ status: "anonymous", user: null });
 }
 
 export function isAuthenticated() {
-  return getAuthState().isAuthenticated;
+  return state.status === "authenticated";
 }
 
-// Frontend-only login: match email against mock users, password must be "password" (demo)
-export function login(email, password, remember = false) {
-  const normalized = email.trim().toLowerCase();
-  const user = getUsers().find((u) => u.email.toLowerCase() === normalized);
-  if (!user) {
-    return { success: false, error: "No account found with that email." };
-  }
-  if (user.status === "Inactive") {
-    return { success: false, error: "Account is inactive. Contact an administrator." };
-  }
-  // Demo password — keep simple; any user can log in with "password"
-  if (password !== "password") {
-    return { success: false, error: "Incorrect password. Hint: use 'password' for demo accounts." };
-  }
-  const state = { isAuthenticated: true, userId: user.id, remember };
-  safeSet(AUTH_KEY, JSON.stringify(state));
-  safeSet(CURRENT_USER_KEY, user.id);
-  notify();
-  return { success: true, user };
+export function getCurrentUser() {
+  return state.user;
 }
 
-export function logout() {
-  safeRemove(AUTH_KEY);
-  // keep current_user_id for next login prefill but clear session
-  // Do not delete CURRENT_USER_KEY to preserve last user hint
-  notify();
+export function getCurrentUserRole() {
+  return state.user?.role || null;
 }
 
-export function requireAuth() {
-  return isAuthenticated();
+/** POST /auth/login — throws ApiError with the server message on failure. */
+export async function login(email, password, remember = true) {
+  const data = await api.post("/auth/login", { email: email.trim(), password }, { auth: false });
+  setSession(data.token, data.user, remember);
+  return data.user;
 }
+
+/**
+ * POST /auth/logout — the server cannot revoke a stateless JWT, so this only
+ * acknowledges the sign-out; discarding the token is what actually ends the
+ * session locally.
+ */
+export async function logout() {
+  try {
+    await api.post("/auth/logout");
+  } catch {
+    // Even if the call fails the local session must be cleared.
+  } finally {
+    clearSession();
+  }
+}
+
+/** GET /auth/me — used to restore and revalidate a session on startup. */
+export async function fetchCurrentUser() {
+  const data = await api.get("/auth/me");
+  return data.user;
+}
+
+let initPromise = null;
+
+/**
+ * Runs at most once per page load. Verifies a stored token against /auth/me so
+ * an expired or tampered token does not leave the app in a half-authenticated
+ * state. Guarded by initPromise so React StrictMode double-effects in
+ * development do not produce duplicate requests.
+ */
+export function initializeAuth() {
+  if (initPromise) return initPromise;
+
+  if (state.status !== "authenticated") {
+    initPromise = Promise.resolve(state);
+    return initPromise;
+  }
+
+  setState({ status: "restoring", user: state.user });
+
+  initPromise = fetchCurrentUser()
+    .then((user) => {
+      setState({ status: "authenticated", user });
+      return state;
+    })
+    .catch(() => {
+      // Invalid or expired token: drop it and send the user back to login.
+      clearSession();
+      return state;
+    });
+
+  return initPromise;
+}
+
+// Any 401 from the API layer invalidates the local session.
+setUnauthorizedHandler(() => {
+  if (state.status !== "anonymous") clearSession();
+});

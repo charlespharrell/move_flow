@@ -4,7 +4,7 @@ import Button from "./ui/Button";
 import { validateCustomer } from "../utils/validation";
 
 // Customer add/edit form — dark theme, validation, accessible labels
-export default function CustomerForm({ initialData, onSubmit, onCancel, submitLabel = "Save Customer" }) {
+export default function CustomerForm({ initialData, onSubmit, onCancel, submitting = false, submitLabel = "Save Customer" }) {
   const [form, setForm] = useState({
     businessName: "",
     contactName: "",
@@ -103,10 +103,12 @@ export default function CustomerForm({ initialData, onSubmit, onCancel, submitLa
       </div>
 
       <div className="flex justify-end gap-2 pt-2">
-        <Button type="button" variant="secondary" onClick={onCancel}>
+        <Button type="button" variant="secondary" onClick={onCancel} disabled={submitting}>
           Cancel
         </Button>
-        <Button type="submit">{submitLabel}</Button>
+        <Button type="submit" disabled={submitting}>
+          {submitting ? "Saving…" : submitLabel}
+        </Button>
       </div>
     </form>
   );

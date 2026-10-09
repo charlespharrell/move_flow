@@ -1,0 +1,242 @@
+// MoveFlow — logistics operations management
+// Single-organization schema. String primary keys preserve the human-readable
+// reference numbers the product already exposes (CUST-001, DRV-001, SH-1001, PAY-001).
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// --- Enums -------------------------------------------------------------------
+
+enum Role {
+  ADMINISTRATOR
+  OPERATIONS
+  FINANCE
+}
+
+/// Shared active/inactive state for users, customers and organizations.
+enum AccountStatus {
+  ACTIVE
+  INACTIVE
+}
+
+enum ShipmentStatus {
+  PENDING
+  ASSIGNED
+  IN_TRANSIT
+  DELIVERED
+  CANCELLED
+}
+
+/// Denormalised payment state kept on the shipment so the shipments table can be
+/// filtered/sorted without joining payments. Kept in sync with Payment rows in a
+/// transaction (see shipmentService/paymentService).
+enum PaymentState {
+  PENDING
+  PARTIAL
+  PAID
+  FAILED
+  REFUNDED
+}
+
+enum PaymentStatus {
+  PENDING
+  PAID
+  FAILED
+  REFUNDED
+}
+
+enum PaymentMethod {
+  BANK_TRANSFER
+  CARD
+  CASH
+  ONLINE_PAYMENT
+}
+
+enum VehicleType {
+  TRUCK
+  VAN
+}
+
+enum DriverStatus {
+  AVAILABLE
+  ASSIGNED
+  OFFLINE
+}
+
+enum LicenseStatus {
+  VALID
+  EXPIRING_SOON
+  EXPIRED
+}
+
+enum VerificationStatus {
+  VERIFIED
+  PENDING
+  EXPIRED
+}
+
+enum ActivityType {
+  CREATED
+  UPDATED
+  ASSIGNED
+  TRANSIT
+  DELIVERED
+  CANCELLED
+  PAYMENT
+}
+
+// --- Models ------------------------------------------------------------------
+
+/// Internal platform user. Exists independently of customers and drivers.
+model User {
+  id           String        @id
+  name         String
+  email        String        @unique
+  phone        String?
+  passwordHash String
+  role         Role          @default(OPERATIONS)
+  status       AccountStatus @default(ACTIVE)
+  joinedDate   DateTime      @default(now()) @db.Date
+  lastActive   DateTime?     @db.Date
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
+
+  activities Activity[]
+
+  @@index([role])
+  @@index([status])
+  @@map("users")
+}
+
+model Organization {
+  id           String   @id @default("org_moveflow")
+  companyName  String
+  companyEmail String
+  companyPhone String?
+  address      String?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@map("organizations")
+}
+
+model Customer {
+  id           String        @id
+  businessName String
+  contactName  String
+  email        String
+  phone        String
+  status       AccountStatus @default(ACTIVE)
+  dateJoined   DateTime      @default(now()) @db.Date
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
+
+  shipments Shipment[]
+  payments  Payment[]
+
+  @@index([status])
+  @@index([businessName])
+  @@index([dateJoined])
+  @@map("customers")
+}
+
+model Driver {
+  id                 String             @id
+  name               String
+  phone              String
+  email              String
+  vehicle            String
+  vehicleType        VehicleType        @default(TRUCK)
+  licenseStatus      LicenseStatus      @default(VALID)
+  verificationStatus VerificationStatus @default(PENDING)
+  status             DriverStatus       @default(AVAILABLE)
+  joinedDate         DateTime           @default(now()) @db.Date
+  createdAt          DateTime           @default(now())
+  updatedAt          DateTime           @updatedAt
+
+  shipments Shipment[]
+
+  @@index([status])
+  @@index([verificationStatus])
+  @@index([name])
+  @@map("drivers")
+}
+
+model Shipment {
+  id                   String         @id
+  customerId           String
+  driverId             String?
+  vehicle              String?
+  status               ShipmentStatus @default(PENDING)
+  /// Denormalised from the related Payment row(s) — see PaymentState.
+  paymentStatus        PaymentState   @default(PENDING)
+  origin               String
+  destination          String
+  currentLocation      String?
+  amount               Decimal        @db.Decimal(12, 2)
+  /// Booking / dispatch date. Surfaced as "Created" throughout the product UI.
+  createdAt            DateTime       @default(now()) @db.Date
+  pickupDate           DateTime?      @db.Date
+  expectedDeliveryDate DateTime?      @db.Date
+  actualDeliveryDate   DateTime?      @db.Date
+  updatedAt            DateTime       @updatedAt
+
+  customer Customer  @relation(fields: [customerId], references: [id], onDelete: Restrict)
+  driver   Driver?   @relation(fields: [driverId], references: [id], onDelete: Restrict)
+  payments Payment[]
+
+  @@index([status])
+  @@index([paymentStatus])
+  @@index([customerId])
+  @@index([driverId])
+  @@index([createdAt])
+  @@map("shipments")
+}
+
+model Payment {
+  id                   String        @id
+  shipmentId           String
+  customerId           String
+  amount               Decimal       @db.Decimal(12, 2)
+  paymentMethod        PaymentMethod
+  status               PaymentStatus @default(PENDING)
+  transactionReference String        @unique
+  /// Payment raised date. Surfaced as "Created" in the product UI.
+  createdAt            DateTime      @default(now()) @db.Date
+  paidAt               DateTime?     @db.Date
+  refundedAt           DateTime?     @db.Date
+  updatedAt            DateTime      @updatedAt
+
+  shipment Shipment @relation(fields: [shipmentId], references: [id], onDelete: Restrict)
+  customer Customer @relation(fields: [customerId], references: [id], onDelete: Restrict)
+
+  @@index([status])
+  @@index([shipmentId])
+  @@index([customerId])
+  @@index([paymentMethod])
+  @@index([createdAt])
+  @@map("payments")
+}
+
+/// Simple append-only operational feed powering the dashboard "Recent activity" panel.
+model Activity {
+  id         String       @id @default(cuid())
+  type       ActivityType
+  message    String
+  entityType String?
+  entityId   String?
+  userId     String?
+  createdAt  DateTime     @default(now())
+
+  user User? @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([createdAt])
+  @@index([type])
+  @@map("activities")
+}

@@ -20,7 +20,7 @@ export default function Unauthorized() {
           <p className="mt-1 max-w-md text-sm text-zinc-400">
             Your current role does not have permission to view this page. Contact an administrator if you believe this is an error.
           </p>
-          <p className="mt-2 text-xs text-zinc-500">Frontend role check only — backend will enforce real authorization later.</p>
+          <p className="mt-2 text-xs text-zinc-500">Access is enforced by role-based permissions on both the frontend and the API.</p>
           <div className="mt-6 flex gap-2">
             <Link to="/">
               <Button>Back to Dashboard</Button>

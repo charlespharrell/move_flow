@@ -215,7 +215,7 @@ function Settings() {
           <Card>
             <h2 className="text-sm font-semibold text-zinc-100">Change Password</h2>
             <p className="mt-1 text-xs text-zinc-500">
-              Frontend-only demo — authentication will be connected when backend is implemented. No real password is stored.
+              Demo only — password changes are not saved. Sign-in uses the API's JWT authentication.
             </p>
             <form onSubmit={handlePasswordSave} noValidate className="mt-4 space-y-4 max-w-md">
               <div>

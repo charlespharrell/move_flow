@@ -1,11 +1,12 @@
 import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
-import { lazy, Suspense } from "react";
+import { lazy, Suspense, useEffect } from "react";
 import DashboardLayout from "./layouts/DashboardLayout";
 import { LoadingState } from "./components/ui/States";
 import ProtectedRoute from "./components/ProtectedRoute";
 import ErrorBoundary from "./components/ErrorBoundary";
 import { ToastProvider } from "./components/ui/Toast";
-import { isAuthenticated } from "./services/authService";
+import { initializeAuth } from "./services/authService";
+import { useAuth } from "./hooks/useAuth";
 
 // Page-level code splitting
 const Dashboard = lazy(() => import("./pages/Dashboard"));
@@ -25,11 +26,21 @@ const Unauthorized = lazy(() => import("./pages/Unauthorized"));
 const NotFound = lazy(() => import("./pages/NotFound"));
 
 function PublicRoute({ children }) {
-  if (isAuthenticated()) return <Navigate to="/" replace />;
+  const { isAuthenticated, isRestoring } = useAuth();
+
+  // Don't bounce an authenticated user away from /login mid-restore.
+  if (isRestoring) return <LoadingState label="Restoring session…" />;
+  if (isAuthenticated) return <Navigate to="/" replace />;
   return children;
 }
 
 function App() {
+  // Verify any stored token once on startup. initializeAuth is internally
+  // guarded, so StrictMode's double effect in development issues one request.
+  useEffect(() => {
+    initializeAuth();
+  }, []);
+
   return (
     <BrowserRouter>
       <ToastProvider>

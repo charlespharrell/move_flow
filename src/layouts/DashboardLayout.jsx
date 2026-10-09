@@ -1,37 +1,39 @@
 import { Outlet, useNavigate } from "react-router-dom";
-import { useState, useEffect } from "react";
+import { useState } from "react";
 import Sidebar, { MobileSidebar } from "../components/Sidebar";
-import { getCurrentUser, subscribe as subscribeAuth, logout } from "../services/authService";
+import { logout } from "../services/authService";
+import { useAuth } from "../hooks/useAuth";
 import Button from "../components/ui/Button";
 import { useToast } from "../components/ui/Toast";
 
 function DashboardLayout() {
   const [mobileOpen, setMobileOpen] = useState(false);
-  const [currentUser, setCurrentUser] = useState(() => getCurrentUser());
+  const { user } = useAuth();
   const navigate = useNavigate();
   const { addToast } = useToast();
 
-  useEffect(() => {
-    const unsub = subscribeAuth(() => setCurrentUser(getCurrentUser()));
-    return unsub;
-  }, []);
+  const initials =
+    user?.name
+      ?.split(" ")
+      .map((n) => n[0])
+      .join("")
+      .slice(0, 2)
+      .toUpperCase() || "?";
 
-  const initials = currentUser?.name?.split(" ").map((n) => n[0]).join("").slice(0, 2) || "AD";
-
-  function handleLogout() {
-    logout();
+  async function handleLogout() {
+    await logout();
     addToast("Signed out", "info");
     navigate("/login", { replace: true });
   }
 
   return (
-    <div className="flex min-h-screen bg-zinc-950">
+    <div className="flex h-screen overflow-hidden bg-zinc-950">
       <Sidebar />
       <MobileSidebar open={mobileOpen} onClose={() => setMobileOpen(false)} />
 
-      <div className="flex min-w-0 flex-1 flex-col">
+      <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-y-auto">
         {/* Top bar — mobile nav + contextual */}
-        <header className="sticky top-0 z-10 flex h-[64px] items-center justify-between gap-4 border-b border-zinc-800 bg-zinc-900/80 px-4 backdrop-blur-md md:px-8">
+        <header className="sticky top-0 z-10 flex h-[64px] items-center justify-between gap-4 border-b border-zinc-800 bg-zinc-900/80 p-4 backdrop-blur-md md:px-8">
           <div className="flex items-center gap-3">
             <button
               type="button"
@@ -55,8 +57,8 @@ function DashboardLayout() {
               System live
             </span>
             <div className="hidden sm:flex flex-col items-end">
-              <span className="text-xs font-medium text-zinc-200">{currentUser?.name}</span>
-              <span className="text-[11px] text-zinc-500">{currentUser?.role}</span>
+              <span className="text-xs font-medium text-zinc-200">{user?.name}</span>
+              <span className="text-[11px] text-zinc-500">{user?.role}</span>
             </div>
             <div className="flex h-8 w-8 items-center justify-center rounded-full bg-zinc-800 border border-zinc-700 text-xs font-semibold text-zinc-300" aria-hidden="true">
               {initials}
