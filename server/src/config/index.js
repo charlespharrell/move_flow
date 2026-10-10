@@ -21,14 +21,21 @@ function required(name, { minLength = 1 } = {}) {
   return value
 }
 
+// Deployed frontend origins that must always be allowed, independent of the
+// environment-specific CLIENT_URL value (e.g. a Render instance that still has
+// a localhost-only CLIENT_URL).
+const productionOrigins = ['https://move-flow-rho.vercel.app']
+
 function parseOrigins(raw) {
   const fallback = ['http://localhost:5173', 'http://127.0.0.1:5173']
-  if (!raw) return fallback
-  const origins = raw
-    .split(',')
-    .map((origin) => origin.trim().replace(/\/+$/, ''))
-    .filter(Boolean)
-  return origins.length > 0 ? origins : fallback
+  const parsed = raw
+    ? raw
+        .split(',')
+        .map((origin) => origin.trim().replace(/\/+$/, ''))
+        .filter(Boolean)
+    : fallback
+  const allowed = parsed.length > 0 ? parsed : fallback
+  return [...new Set([...allowed, ...productionOrigins])]
 }
 
 const DEFAULT_PORT = 5000
