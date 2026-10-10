@@ -50,7 +50,7 @@ function Login() {
         <div className="mb-6 text-center">
           <div className="mx-auto flex h-10 w-10 items-center justify-center rounded-xl bg-blue-600 text-sm font-bold text-white">M</div>
           <h1 className="mt-3 text-xl font-semibold tracking-tight text-zinc-50">Sign in to MoveFlow</h1>
-          <p className="mt-1 text-sm text-zinc-400">Logistics control centre — demo authentication</p>
+          <p className="mt-1 text-sm text-zinc-400">Logistics control centre</p>
         </div>
 
         <Card>
